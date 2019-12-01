@@ -1,8 +1,8 @@
 ---
 title: "FPL Squad Optimiser"
-output: html_notebook
-editor_options: 
-  chunk_output_type: console
+output: 
+  md_document:
+    variant: markdown_github
 ---
 
 
@@ -17,7 +17,7 @@ library(lpSolve)
 ```{r}
 player_info <- get_player_info()
 #player_info <- read_csv('player_info.csv')
-team_ref <- read_csv('team_ref.csv')
+team_ref <- read_csv('data/team_ref.csv')
 
 # team_ids <- unique(player_info$team_code)
 # team_names <- c('Arsenal', 'Aston Villa', 'Bournemouth', 'Brighton', 'Burnley', 'Chelsea', 'Crystal Palace',
@@ -27,7 +27,7 @@ team_ref <- read_csv('team_ref.csv')
 # 
 # team_ref <- tibble(team_id = team_ids, team_name = team_names)
 # 
-# write_csv(team_ref, 'team_ref.csv')
+# write_csv(team_ref, 'data/team_ref.csv')
 
 
 ```
