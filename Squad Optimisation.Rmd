@@ -3,19 +3,25 @@ title: "FPL Squad Optimiser"
 output: github_document
 ---
 
+This file contains code to calculate the optimal FPL squad possible based on the historical points obtained for each player. It is calculated against the starting budget of 100m.
 
-```{r}
+Some assumptions
+
+1) This only solves for 11 players, a bench of minimum cost is assumed, so the budget provided is 83m (17m is the minimum amount needed to fill the bench slots).
+2) Substitions are not taken into account as that takes the scope of the problem beyond linear programming.
+
+
+This code can be re-run to include any updated information as it scrapes from the FPL website
+
+```{r, message = FALSE}
 library(tidyverse)
 library(fplscrapR)
 library(lpSolve)
-
+library(knitr)
 ```
 
-
-```{r}
-player_info <- get_player_info()
-#player_info <- read_csv('player_info.csv')
-team_ref <- read_csv('data/team_ref.csv')
+```{r, include = FALSE}
+### Creating a ref table for team names 
 
 # team_ids <- unique(player_info$team_code)
 # team_names <- c('Arsenal', 'Aston Villa', 'Bournemouth', 'Brighton', 'Burnley', 'Chelsea', 'Crystal Palace',
@@ -27,14 +33,18 @@ team_ref <- read_csv('data/team_ref.csv')
 # 
 # write_csv(team_ref, 'data/team_ref.csv')
 
-
 ```
 
-```{r}
-player_info_cln <- player_info %>% 
-  mutate(start_cost = (now_cost - cost_change_start)) %>% 
-  select(playername, total_points, team_code, element_type, start_cost, now_cost) %>% 
-  left_join(team_ref, by = c('team_code' = 'team_id'))
+
+
+```{r, message = FALSE}
+player_info <- get_player_info()
+team_ref <- read_csv('data/team_ref.csv')
+```
+
+
+```{r, message = FALSE}
+# Setting up a function for convenience later
 
 one_hot_encode <- function(df, column) {
   column <- enquo(column)
@@ -45,17 +55,43 @@ one_hot_encode <- function(df, column) {
     pivot_wider(names_from = !!column, values_from = count, values_fill = list(count = 0))
 
 }
+```
 
+```{r}
+player_info_cln <- player_info %>% 
+  mutate(start_cost = (now_cost - cost_change_start)) %>% 
+  select(playername, total_points, team_code, element_type, start_cost, now_cost) %>% 
+  left_join(team_ref, by = c('team_code' = 'team_id'))
 ```
 
 
-```{r}
-# Assume no subs and 87m to spend as 17 is required for bench
+How the code works:
+This problem can be summarised into a series of linear equations.
+The equation to be optimised is essentially a equation where the coefficient is the points of the player with a binary variable indicating the selection of the player.
+
+
+There are a few constrains based on the rules of the game, they can all be represented as linear equations, similarly to above but with different coefficients.
+List of constraints:
+
+1) Only 3 players can be selected from each team.
+
+This can be written as 20 separate equations (1 for each team) where the coefficients are binary indicators of whether player n is in the team.
+
+2) As stated earlier, there is a budget constraint, this is written as an equation where the coefficient are the cost of each player, and the total cost has to be below 830 (83m in-game)
+
+3) There are limits on the possible formations in the game. You can only play 1 goalkeeper, and for the other 3 positions, there is a lower and upper limit. Each limit is written as one equation too. The code here ensures that the final output is of a valid formation.
+
+
+```{r, message = FALSE}
+# Assume no subs and 83m to spend as 17 is required for bench
 
 # Setup variables
 num_gk <- 1
 num_def_min <- 3
-num_def_max <- 5
+
+# Note: the max amount of defenders if 4 instead of 5 as only defenders can cost 4.0m at the start of a season, so there is an assumption that we have a 4.0m defender on the bench in this code
+
+num_def_max <- 4
 num_mid_min <- 2
 num_mid_max <- 5
 num_fwd_min <- 1
@@ -63,11 +99,11 @@ num_fwd_max <- 3
 
 
 squad_max <- 11
-budget <- 870
+budget <- 830
 ```
 
 
-```{r}
+```{r, message = FALSE}
 input <- player_info_cln %>% 
   mutate(position = case_when(
     element_type == 1 ~ 'goalkeeper',
@@ -85,11 +121,9 @@ team_const <- input %>%
   as.vector()
 
 
-optimise_squad <- function(input, cost) {
+optimise_squad <- function(input, cost = start_cost) {
 
   cost <- enquo(cost)
-  
-  #if(!(cost %in% c(sym(now_cost), sym(start_cost)))) stop('use a proper cost variable')
   
   goalkeeper <- input$goalkeeper
   defender <- input$defender
@@ -97,8 +131,6 @@ optimise_squad <- function(input, cost) {
   forward <- input$forward
   team_vector <- rep(1, nrow(player_info))
   player_cost <- pull(input, !!cost)
-  
-  
   
   const_vector <- c(goalkeeper, defender, defender, midfielder, midfielder, forward, forward, team_vector, player_cost, team_const)
   
@@ -135,7 +167,15 @@ optimise_squad <- function(input, cost) {
     mutate(solution = result$solution) %>% 
     filter(solution == 1) %>% 
     arrange(element_type, desc(total_points)) %>% 
-    select(-element_type, -team_code, -solution)
+    select(-element_type, -team_code, -solution) %>% 
+    rename(
+      'Player' = playername, 
+      'Total Points' = total_points, 
+      'Starting Cost' = start_cost,
+      'Current Cost' = now_cost,
+      'Team' = team_name,
+      'Position' = position
+    )
   
 }
 
@@ -143,8 +183,21 @@ optimise_squad <- function(input, cost) {
 ```
 
 
-```{r}
-now_solution <- optimise_squad(input, now_cost)
-start_solution <- optimise_squad(input, start_cost) 
+```{r, include = FALSE}
+start_solution <- optimise_squad(input, start_cost) %>% 
+  select(-`Current Cost`)
+
+now_solution <- optimise_squad(input, now_cost) %>% 
+  select(-`Starting Cost`)
+```
+
+Solution 1: Optimal squad based on starting prices of players
+```{r, echo = FALSE}
+kable(start_solution)
+```
+
+Solution 2: Optimal squad based on current prices of players (with starting budget)
+```{r, echo = FALSE}
+kable(now_solution)
 ```
 

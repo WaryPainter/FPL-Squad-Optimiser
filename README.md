@@ -1,55 +1,35 @@
 FPL Squad Optimiser
 ================
 
+This file contains code to calculate the optimal FPL squad possible
+based on the historical points obtained for each player. It is
+calculated against the starting budget of 100m.
+
+Some assumptions
+
+1)  This only solves for 11 players, a bench of minimum cost is assumed,
+    so the budget provided is 83m (17m is the minimum amount needed to
+    fill the bench slots).
+2)  Substitions are not taken into account as that takes the scope of
+    the problem beyond linear programming.
+
+This code can be re-run to include any updated information as it scrapes
+from the FPL website
+
 ``` r
 library(tidyverse)
-```
-
-    ## -- Attaching packages --------------------------------------------------------------------------------------- tidyverse 1.3.0 --
-
-    ## v ggplot2 3.2.1     v purrr   0.3.3
-    ## v tibble  2.1.3     v dplyr   0.8.3
-    ## v tidyr   1.0.0     v stringr 1.4.0
-    ## v readr   1.3.1     v forcats 0.4.0
-
-    ## -- Conflicts ------------------------------------------------------------------------------------------ tidyverse_conflicts() --
-    ## x dplyr::filter() masks stats::filter()
-    ## x dplyr::lag()    masks stats::lag()
-
-``` r
 library(fplscrapR)
 library(lpSolve)
+library(knitr)
 ```
 
 ``` r
 player_info <- get_player_info()
-#player_info <- read_csv('player_info.csv')
 team_ref <- read_csv('data/team_ref.csv')
 ```
 
-    ## Parsed with column specification:
-    ## cols(
-    ##   team_id = col_double(),
-    ##   team_name = col_character()
-    ## )
-
 ``` r
-# team_ids <- unique(player_info$team_code)
-# team_names <- c('Arsenal', 'Aston Villa', 'Bournemouth', 'Brighton', 'Burnley', 'Chelsea', 'Crystal Palace',
-#                 'Everton', 'Leicester City', 'Liverpool', 'Manchester United', 'Manchester City', 'Newcastle United',
-#                 'Norwich City', 'Sheffield United', 'Southampton', 'Tottenham Hotspur', 'Watford', 'West Ham United',
-#                 'Wolverhampton Wanderers')
-# 
-# team_ref <- tibble(team_id = team_ids, team_name = team_names)
-# 
-# write_csv(team_ref, 'data/team_ref.csv')
-```
-
-``` r
-player_info_cln <- player_info %>% 
-  mutate(start_cost = (now_cost - cost_change_start)) %>% 
-  select(playername, total_points, team_code, element_type, start_cost, now_cost) %>% 
-  left_join(team_ref, by = c('team_code' = 'team_id'))
+# Setting up a function for convenience later
 
 one_hot_encode <- function(df, column) {
   column <- enquo(column)
@@ -63,12 +43,47 @@ one_hot_encode <- function(df, column) {
 ```
 
 ``` r
-# Assume no subs and 87m to spend as 17 is required for bench
+player_info_cln <- player_info %>% 
+  mutate(start_cost = (now_cost - cost_change_start)) %>% 
+  select(playername, total_points, team_code, element_type, start_cost, now_cost) %>% 
+  left_join(team_ref, by = c('team_code' = 'team_id'))
+```
+
+How the code works: This problem can be summarised into a series of
+linear equations. The equation to be optimised is essentially a equation
+where the coefficient is the points of the player with a binary variable
+indicating the selection of the player.
+
+There are a few constrains based on the rules of the game, they can all
+be represented as linear equations, similarly to above but with
+different coefficients. List of constraints:
+
+1)  Only 3 players can be selected from each team.
+
+This can be written as 20 separate equations (1 for each team) where the
+coefficients are binary indicators of whether player n is in the team.
+
+2)  As stated earlier, there is a budget constraint, this is written as
+    an equation where the coefficient are the cost of each player, and
+    the total cost has to be below 830 (83m in-game)
+
+3)  There are limits on the possible formations in the game. You can
+    only play 1 goalkeeper, and for the other 3 positions, there is a
+    lower and upper limit. Each limit is written as one equation too.
+    The code here ensures that the final output is of a valid formation.
+
+<!-- end list -->
+
+``` r
+# Assume no subs and 83m to spend as 17 is required for bench
 
 # Setup variables
 num_gk <- 1
 num_def_min <- 3
-num_def_max <- 5
+
+# Note: the max amount of defenders if 4 instead of 5 as only defenders can cost 4.0m at the start of a season, so there is an assumption that we have a 4.0m defender on the bench in this code
+
+num_def_max <- 4
 num_mid_min <- 2
 num_mid_max <- 5
 num_fwd_min <- 1
@@ -76,7 +91,7 @@ num_fwd_max <- 3
 
 
 squad_max <- 11
-budget <- 870
+budget <- 830
 ```
 
 ``` r
@@ -101,11 +116,9 @@ team_const <- input %>%
     ## coercion
 
 ``` r
-optimise_squad <- function(input, cost) {
+optimise_squad <- function(input, cost = start_cost) {
 
   cost <- enquo(cost)
-  
-  #if(!(cost %in% c(sym(now_cost), sym(start_cost)))) stop('use a proper cost variable')
   
   goalkeeper <- input$goalkeeper
   defender <- input$defender
@@ -113,8 +126,6 @@ optimise_squad <- function(input, cost) {
   forward <- input$forward
   team_vector <- rep(1, nrow(player_info))
   player_cost <- pull(input, !!cost)
-  
-  
   
   const_vector <- c(goalkeeper, defender, defender, midfielder, midfielder, forward, forward, team_vector, player_cost, team_const)
   
@@ -151,12 +162,50 @@ optimise_squad <- function(input, cost) {
     mutate(solution = result$solution) %>% 
     filter(solution == 1) %>% 
     arrange(element_type, desc(total_points)) %>% 
-    select(-element_type, -team_code, -solution)
+    select(-element_type, -team_code, -solution) %>% 
+    rename(
+      'Player' = playername, 
+      'Total Points' = total_points, 
+      'Starting Cost' = start_cost,
+      'Current Cost' = now_cost,
+      'Team' = team_name,
+      'Position' = position
+    )
   
 }
 ```
 
-``` r
-now_solution <- optimise_squad(input, now_cost)
-start_solution <- optimise_squad(input, start_cost) 
-```
+Solution 1: Optimal squad based on starting prices of
+players
+
+| Player                           | Total Points | Starting Cost | Team              | Position   |
+| :------------------------------- | -----------: | ------------: | :---------------- | :--------- |
+| Mathew Ryan                      |           60 |           4.5 | Brighton          | Goalkeeper |
+| Ricardo Domingos Barbosa Pereira |           75 |           6.0 | Leicester City    | Defender   |
+| John Lundstram                   |           75 |           4.0 | Sheffield United  | Defender   |
+| Benjamin Chilwell                |           64 |           5.5 | Leicester City    | Defender   |
+| Kevin De Bruyne                  |           96 |           9.5 | Manchester United | Midfielder |
+| Sadio Mané                       |           94 |          11.5 | Liverpool         | Midfielder |
+| Raheem Sterling                  |           79 |          12.0 | Manchester United | Midfielder |
+| David Silva                      |           77 |           7.5 | Manchester United | Midfielder |
+| Jamie Vardy                      |          110 |           9.0 | Leicester City    | Forward    |
+| Tammy Abraham                    |           83 |           7.0 | Chelsea           | Forward    |
+| Teemu Pukki                      |           74 |           6.5 | Norwich City      | Forward    |
+
+Solution 2: Optimal squad based on current prices of players (with
+starting
+budget)
+
+| Player                           | Total Points | Current Cost | Team              | Position   |
+| :------------------------------- | -----------: | -----------: | :---------------- | :--------- |
+| Mathew Ryan                      |           60 |          4.8 | Brighton          | Goalkeeper |
+| Ricardo Domingos Barbosa Pereira |           75 |          6.4 | Leicester City    | Defender   |
+| John Lundstram                   |           75 |          5.1 | Sheffield United  | Defender   |
+| Andrew Robertson                 |           65 |          7.1 | Liverpool         | Defender   |
+| Çaglar Söyüncü                   |           63 |          5.1 | Leicester City    | Defender   |
+| Kevin De Bruyne                  |           96 |         10.3 | Manchester United | Midfielder |
+| Sadio Mané                       |           94 |         12.2 | Liverpool         | Midfielder |
+| David Silva                      |           77 |          7.6 | Manchester United | Midfielder |
+| Jamie Vardy                      |          110 |          9.9 | Leicester City    | Forward    |
+| Tammy Abraham                    |           83 |          7.9 | Chelsea           | Forward    |
+| Teemu Pukki                      |           74 |          6.6 | Norwich City      | Forward    |
