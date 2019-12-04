@@ -103,7 +103,7 @@ budget <- 830
 ```
 
 
-```{r, message = FALSE}
+```{r, message = FALSE, warning = FALSE}
 input <- player_info_cln %>% 
   mutate(position = case_when(
     element_type == 1 ~ 'goalkeeper',

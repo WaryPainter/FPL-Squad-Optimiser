@@ -110,12 +110,8 @@ team_const <- input %>%
   select(which(!is.na(as.numeric(colnames(input))))) %>% 
   as.matrix() %>% 
   as.vector()
-```
 
-    ## Warning in which(!is.na(as.numeric(colnames(input)))): NAs introduced by
-    ## coercion
 
-``` r
 optimise_squad <- function(input, cost = start_cost) {
 
   cost <- enquo(cost)
